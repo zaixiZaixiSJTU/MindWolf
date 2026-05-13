@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Recurse -Depth 2)",
+      "Bash(Select-Object -First 80)",
+      "Bash(python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:8765/health)",
+      "Bash(curl -s -X POST http://localhost:8765/game/start)",
+      "Bash(python -c \"import sys, asyncio, websockets, json; exec\\('async def __m\\(\\):\\\\\\\\n    async with websockets.connect\\(\\\\\"ws://localhost:8765/ws/spectator\\\\\"\\) as ws:\\\\\\\\n        for _ in range\\(5\\):\\\\\\\\n            msg = await asyncio.wait_for\\(ws.recv\\(\\), timeout=15.0\\)\\\\\\\\n            data = json.loads\\(msg\\)\\\\\\\\n            print\\(data[chr\\(116\\)+chr\\(121\\)+chr\\(112\\)+chr\\(101\\)], data.get\\(chr\\(112\\)+chr\\(97\\)+chr\\(121\\)+chr\\(108\\)+chr\\(111\\)+chr\\(97\\)+chr\\(100\\),{}\\).get\\(chr\\(112\\)+chr\\(104\\)+chr\\(97\\)+chr\\(115\\)+chr\\(101\\)\\) or data.get\\(chr\\(112\\)+chr\\(97\\)+chr\\(121\\)+chr\\(108\\)+chr\\(111\\)+chr\\(97\\)+chr\\(100\\),{}\\).get\\(chr\\(109\\)+chr\\(111\\)+chr\\(100\\)+chr\\(101\\)+chr\\(108\\)\\) or data.get\\(chr\\(112\\)+chr\\(97\\)+chr\\(121\\)+chr\\(108\\)+chr\\(111\\)+chr\\(97\\)+chr\\(100\\),{}\\).get\\(chr\\(119\\)+chr\\(105\\)+chr\\(110\\)+chr\\(110\\)+chr\\(101\\)+chr\\(114\\)\\) or chr\\(34\\)+chr\\(34\\)\\)\\\\\\\\nasyncio.run\\(__m\\(\\)\\)'\\)\")",
+      "Bash(curl -s http://localhost:5173/src/App.tsx)",
+      "Bash(curl -s http://localhost:5173/src/components/LogPanel.tsx)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s http://localhost:8765/game/state)",
+      "Bash(curl -s http://localhost:5173/)",
+      "Bash(curl -s http://localhost:5173/src/main.tsx)",
+      "Bash(curl -s http://localhost:8765/game/logs)",
+      "Bash(curl -s \"http://localhost:8765/game/events?round=2\")",
+      "Bash(curl -s \"http://localhost:8765/game/events?round=4\")",
+      "Bash(curl -s \"http://localhost:8765/game/events?round=1\")",
+      "Bash(curl -s \"http://localhost:8765/game/logs/game_20260512_075315\")",
+      "Bash(curl -s \"http://localhost:8765/game/events?round=3\")",
+      "Bash(curl -s \"http://localhost:8765/game/beliefs\")",
+      "Bash(netstat -ano)",
+      "PowerShell(taskkill /F /PID 58016)",
+      "PowerShell(taskkill /F /PID 31636)",
+      "PowerShell(Get-Process | Where-Object { $_.Id -eq 58016 -or $_.Id -eq 31636 } | ForEach-Object { $_.Id; $_.ProcessName; $_.Parent.Id }; taskkill /F /T /PID 58016; taskkill /F /T /PID 31636)",
+      "PowerShell($procs = Get-Process python -ErrorAction SilentlyContinue; foreach \\($p in $procs\\) { Write-Output \"PID=$\\($p.Id\\) Name=$\\($p.ProcessName\\)\" })",
+      "PowerShell(taskkill /F /IM python.exe 2>&1)",
+      "PowerShell(curl.exe -s http://localhost:8765/health 2>&1)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git add *)"
+    ]
+  }
+}
