@@ -53,10 +53,23 @@ class MemoryPool:
     def format_for_prompt(self, min_weight: float = 0.2) -> str:
         active = self.get_active_memories(min_weight)
         if not active:
-            return "[无重要记忆]"
-        lines = ["[重要记忆]"]
+            return "[暂无重要记忆]"
+
+        # Group by round
+        by_round: dict[int, list[MemoryUnit]] = {}
         for u in active:
-            lines.append(f"- 第{u.round}轮，{u.speaker_id}号：{u.content} (权重{u.current_weight:.2f})")
+            by_round.setdefault(u.round, []).append(u)
+        by_round_sorted = sorted(by_round.items(), key=lambda x: x[0])
+
+        lines = ["# 历史记忆（按轮次排列）"]
+        for rnd, units in by_round_sorted:
+            lines.append(f"## 第{rnd}轮")
+            for u in sorted(units, key=lambda u: u.current_weight, reverse=True):
+                target_str = f"→ {u.target_id}号" if u.target_id else ""
+                lines.append(
+                    f"- P{u.speaker_id}号 {target_str} | {u.content} "
+                    f"(可信度{u.current_weight:.0%})"
+                )
         return "\n".join(lines)
 
 

@@ -40,6 +40,9 @@ class BaseAgent:
 
         user_context = self._build_user_context(phase, alive_ids, extra_info)
 
+        # Inject own past speech history so agent remembers what it claimed
+        own_history = self._format_own_history()
+
         lying_strategy = self.lying_engine.select_strategy(
             self.player.role,
             self._get_self_suspicion(),
@@ -50,6 +53,7 @@ class BaseAgent:
             f"{system_prompt}\n\n"
             f"# 本轮策略提示\n{strategy_hint or '诚实发言，根据你的身份做出合理决策。'}\n\n"
             f"# 当前任务\n{user_context}\n\n"
+            f"{own_history}"
             f"请输出你的<thinking>、<speak>、<vote>和<action>。"
         )
 
@@ -71,6 +75,22 @@ class BaseAgent:
             self.lying_engine.record_lie(self.player.id, self.state.round, action)
 
         return action
+
+    def _format_own_history(self) -> str:
+        """Summarize this agent's own past actions for self-consistency."""
+        if not self._conversation_history:
+            return ""
+        recent = self._conversation_history[-6:]  # last 3 exchanges
+        lines = ["# 你之前几轮的发言记录（必须保持前后一致！）"]
+        for i, entry in enumerate(recent):
+            if entry["role"] == "assistant":
+                content = entry["content"]
+                # Extract just the speak part
+                import re
+                speak_m = re.search(r"<speak>(.*?)</speak>", content, re.DOTALL)
+                if speak_m:
+                    lines.append(f"- 你的发言: {speak_m.group(1).strip()[:200]}")
+        return "\n".join(lines) + "\n\n" if len(lines) > 1 else ""
 
     async def _call_llm(self, prompt: str, phase: Phase) -> GameAction:
         for attempt in range(self.llm_config.max_retries + 1):
@@ -152,8 +172,50 @@ class BaseAgent:
         self, phase: Phase, alive_ids: list[int], extra_info: dict | None,
     ) -> str:
         context = f"当前阶段: {phase.value}\n存活玩家: {alive_ids}"
+
+        # Phase-specific instructions
+        if phase == Phase.NIGHT_WEREWOLF:
+            context += (
+                "\n\n⚠️ 这是狼人夜间私密频道。你正在和狼队友私下协商，不是公开发言。"
+                "\n- <speak> 中写的是你对狼队友说的话（如：建议刀X号，我准备悍跳预言家）"
+                "\n- 不要在夜间频道里表演预言家给队友发金水——那是白天做的事"
+                "\n- 必须通过 <action>kill:目标ID</action> 提交刀人目标"
+            )
+        elif phase == Phase.NIGHT_SEER:
+            context += (
+                "\n\n你是预言家，正在夜间查验。"
+                "\n- <action>check:目标ID</action> 提交查验目标"
+                "\n- 天亮后要在公开发言中如实报告查验结果"
+            )
+        elif phase == Phase.NIGHT_WITCH:
+            context += (
+                "\n\n你是女巫，正在夜间行动。"
+                "\n- 解药: <action>antidote</action> 救活狼刀死者"
+                "\n- 毒药: <action>poison:目标ID</action> 毒杀一名玩家"
+            )
+        elif phase == Phase.DAY_VOTE:
+            context += (
+                "\n\n⚠️ 这是投票阶段。你必须投出一票给最怀疑的存活玩家。"
+                "\n- <vote>目标ID</vote> 中填写你想放逐的玩家ID"
+            )
+
         if extra_info:
-            context += f"\n额外信息: {json.dumps(extra_info, ensure_ascii=False)}"
+            # For day phases, keep transcript short to avoid copycat
+            if phase in (Phase.DAY_DISCUSS, Phase.DAY_VOTE):
+                extra_clean = dict(extra_info)
+                if "round_transcript" in extra_clean:
+                    # Truncate each speech in transcript to 40 chars
+                    lines = extra_clean["round_transcript"].split("\n")
+                    short_lines = []
+                    for line in lines:
+                        if len(line) > 60:
+                            short_lines.append(line[:60] + "…")
+                        else:
+                            short_lines.append(line)
+                    extra_clean["round_transcript"] = "\n".join(short_lines)
+                context += f"\n额外信息: {json.dumps(extra_clean, ensure_ascii=False)}"
+            else:
+                context += f"\n额外信息: {json.dumps(extra_info, ensure_ascii=False)}"
         return context
 
     def _get_self_suspicion(self) -> float:

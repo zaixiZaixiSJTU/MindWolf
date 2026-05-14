@@ -245,18 +245,28 @@ class GameMaster:
         killed = self._last_wolf_kill
 
         for witch in witches:
+            # Enforce no-self-save rule
+            can_self_save = self.config.witch_can_self_save
+            is_self_killed = killed == witch.id
+            extra_witch = {
+                "night_killed": killed,
+                "your_skills": witch.skill_available,
+            }
+            if is_self_killed and not can_self_save:
+                extra_witch["warning"] = "你被狼人刀了。规则禁止女巫自救——你只能用毒药，不能用解药救自己。"
             action = await self._request_action(
                 witch.id, alive_ids,
-                extra_info={
-                    "night_killed": killed,
-                    "your_skills": witch.skill_available,
-                },
+                extra_info=extra_witch,
             )
             self._record_event(witch.id, action)
 
             if action.skill_name == "antidote" and witch.skill_available.get("antidote"):
-                witch.skill_available["antidote"] = False
-                self._last_witch_save = killed
+                # Enforce self-save rule
+                if is_self_killed and not can_self_save:
+                    logger.warning(f"Witch {witch.id} tried to self-save but config forbids it")
+                else:
+                    witch.skill_available["antidote"] = False
+                    self._last_witch_save = killed
             elif action.skill_name == "poison" and witch.skill_available.get("poison"):
                 witch.skill_available["poison"] = False
                 self._last_witch_poison = action.skill_target
@@ -489,8 +499,8 @@ class GameMaster:
                     f"({elapsed:.1f}s)")
 
         self.log_llm_call(player_id,
-            prompt=f"[phase={self.state.phase.value} round={self.state.round}]",
-            response=thinking_preview,
+            prompt=memory_text if memory_text else "(no memory)",
+            response=action.thinking if action.thinking else action.speech,
             elapsed=elapsed,
             model=model_name,
         )
@@ -556,21 +566,38 @@ class GameMaster:
             "memory_snapshot": memory_text,
             "alive_count": len(self.state.get_alive_players()),
         }
+
+        # Role-specific private night knowledge
+        nr = self.state.night_results[-1] if self.state.night_results else None
+        if nr:
+            if player.role in WEREWOLF_ROLES:
+                ctx["your_wolf_kill_target"] = nr.killed_player
+                if nr.saved_player:
+                    ctx["wolf_kill_result"] = f"你的狼刀目标{nr.killed_player}号被女巫救了（平安夜）"
+                elif nr.killed_player:
+                    ctx["wolf_kill_result"] = f"你的狼刀目标{nr.killed_player}号死亡"
+
+            if player.role == Role.WITCH:
+                if nr.saved_player:
+                    ctx["you_saved"] = nr.saved_player
+                if nr.poisoned_player:
+                    ctx["you_poisoned"] = nr.poisoned_player
+
+            if player.role == Role.SEER:
+                # Get seer's last check from own conversation history — handled by _format_own_history
+                pass
+
         if transcript:
             ctx["round_transcript"] = "\n".join(transcript)
         return ctx
 
     @staticmethod
     def _format_death_info(deaths: list[tuple[int, str]]) -> str:
+        """Public death announcement — only who died, not how."""
         if not deaths:
             return "昨夜是平安夜，无人死亡。"
-        parts = []
-        for pid, cause in deaths:
-            if cause == "wolf_kill":
-                parts.append(f"{pid}号玩家被狼人杀害")
-            elif cause == "poison":
-                parts.append(f"{pid}号玩家被毒杀")
-        return "；".join(parts)
+        names = "、".join(f"{pid}号" for pid, _ in deaths)
+        return f"昨夜{names}玩家死亡。"
 
     # ---- Structured logging ----
 
@@ -600,28 +627,140 @@ class GameMaster:
     def _write_logs(self) -> None:
         path = self._get_log_path()
 
+        # Machine-readable JSONL (one event per line)
         events_path = os.path.join(path, "events.jsonl")
         with open(events_path, "w", encoding="utf-8") as f:
             for e in self.state.game_history:
                 f.write(e.model_dump_json() + "\n")
 
-        beliefs_path = os.path.join(path, "beliefs.jsonl")
+        # Pretty-printed events summary (truncated thinking for file size)
+        events_json_path = os.path.join(path, "events.json")
+        events_summary = []
+        for e in self.state.game_history:
+            a = e.action
+            events_summary.append({
+                "round": e.round,
+                "phase": e.phase.value,
+                "actor_id": e.actor_id,
+                "skill": f"{a.skill_name or '-'} → P{a.skill_target}" if a.skill_target else (a.skill_name or "-"),
+                "vote": f"P{a.vote_target}" if a.vote_target else None,
+                "speech": a.speech[:200] if a.speech else "",
+                "thinking": a.thinking[:150] if a.thinking else "",
+            })
+        with open(events_json_path, "w", encoding="utf-8") as f:
+            json.dump(events_summary, f, ensure_ascii=False, indent=2)
+
+        # Human-readable transcript
+        self._write_transcript(path)
+
+        # Pretty-printed beliefs summary
+        beliefs_path = os.path.join(path, "beliefs.json")
         with open(beliefs_path, "w", encoding="utf-8") as f:
+            beliefs_out = {}
             for pid, belief in self.belief_states.items():
                 belief.round = self.state.round
+                top = {}
+                for tid, probs in belief.role_probabilities.items():
+                    best = max(probs, key=probs.get)
+                    if probs[best] > 0.3:
+                        top[str(tid)] = {best: round(probs[best], 3)}
+                beliefs_out[str(pid)] = {
+                    "round": belief.round,
+                    "confidence": round(belief.confidence, 2),
+                    "top_beliefs": top,
+                    "reason": belief.update_reason,
+                }
+            json.dump(beliefs_out, f, ensure_ascii=False, indent=2)
+
+        # Machine JSONL for beliefs (compact)
+        beliefs_jsonl = os.path.join(path, "beliefs.jsonl")
+        with open(beliefs_jsonl, "w", encoding="utf-8") as f:
+            for pid, belief in self.belief_states.items():
                 f.write(belief.model_dump_json() + "\n")
 
+        # Lies
         lies_path = os.path.join(path, "lies.json")
         with open(lies_path, "w", encoding="utf-8") as f:
             json.dump([], f, ensure_ascii=False, indent=2)
 
+        # LLM call logs — pretty + JSONL
         if self._llm_call_log:
-            llm_path = os.path.join(path, "llm_calls.jsonl")
-            with open(llm_path, "w", encoding="utf-8") as f:
+            llm_jsonl = os.path.join(path, "llm_calls.jsonl")
+            with open(llm_jsonl, "w", encoding="utf-8") as f:
                 for call in self._llm_call_log:
                     f.write(json.dumps(call, ensure_ascii=False) + "\n")
+            llm_pretty = os.path.join(path, "llm_calls.json")
+            with open(llm_pretty, "w", encoding="utf-8") as f:
+                json.dump(self._llm_call_log, f, ensure_ascii=False, indent=2)
 
         logger.info(f"Logs written to {path}")
+
+    def _write_transcript(self, path: str) -> None:
+        """Write a human-readable game transcript."""
+        events = self.state.game_history
+        if not events:
+            return
+
+        lines: list[str] = []
+        W = 80
+        role_map = {p.id: p.role.value for p in self.state.players}
+        name_map = {p.id: p.name for p in self.state.players}
+
+        lines.append("=" * W)
+        lines.append(f"  GAME TRANSCRIPT — {self.game_id}")
+        lines.append(f"  Winner: {self.state.winner.value if self.state.winner else '?'}")
+        lines.append("=" * W)
+
+        cur_round = 0
+        cur_phase = None
+
+        for e in events:
+            r = e.round
+            ph = e.phase.value
+            a = e.action
+            pid = a.player_id
+            role = role_map.get(pid, "?")
+            name = name_map.get(pid, f"P{pid}")
+
+            # Section header on round/phase change
+            if r != cur_round or ph != cur_phase:
+                cur_round = r
+                cur_phase = ph
+                alive = [p.id for p in self.state.players if p.is_alive]
+                lines.append("")
+                lines.append("-" * W)
+                lines.append(f"  ROUND {r} | {ph}")
+                lines.append(f"  Alive: {alive}")
+                lines.append("-" * W)
+
+            # Event entry
+            lines.append("")
+            header = f"  P{pid} ({name} | {role})"
+            if a.skill_name:
+                header += f"  [{a.skill_name}"
+                if a.skill_target:
+                    header += f" → P{a.skill_target}"
+                header += "]"
+            if a.vote_target:
+                header += f"  VOTE → P{a.vote_target}"
+            lines.append(header)
+
+            if a.thinking:
+                lines.append(f"    THINK: {a.thinking[:200]}")
+            if a.speech:
+                lines.append(f"    SPEAK: {a.speech}")
+
+        # End summary
+        lines.append("")
+        lines.append("=" * W)
+        lines.append(f"  GAME OVER — Winner: {self.state.winner.value if self.state.winner else '?'}")
+        lines.append(f"  Rounds: {self.state.round}")
+        lines.append(f"  Memories: {len(self.memory_pool.units)}")
+        lines.append("=" * W)
+
+        transcript_path = os.path.join(path, "transcript.txt")
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
     def log_llm_call(self, player_id: int, prompt: str, response: str, elapsed: float, model: str = "") -> None:
         entry = {

@@ -88,19 +88,23 @@ class PromptBuilder:
         return "\n".join(parts)
 
     def _format_night_results(self, state: GameState) -> str:
+        """Public night announcement — only reveals who died, not cause.
+        (Wolves/witch/seer get their private knowledge via extra_info.)"""
         if not state.night_results:
             return "尚无夜间结果。"
         last = state.night_results[-1]
-        deaths = []
-        if last.killed_player:
-            deaths.append(f"狼刀目标: {last.killed_player}号")
-        if last.saved_player:
-            deaths.append(f"被救: {last.saved_player}号")
+
+        # Collect actual deaths (wolf kill not saved, or poison)
+        dead_ids: list[int] = []
+        if last.killed_player and last.killed_player != last.saved_player:
+            dead_ids.append(last.killed_player)
         if last.poisoned_player:
-            deaths.append(f"被毒: {last.poisoned_player}号")
-        if not deaths:
-            return "昨夜平安夜，无人死亡。"
-        return "昨夜：" + "，".join(deaths)
+            dead_ids.append(last.poisoned_player)
+
+        if not dead_ids:
+            return "昨夜是平安夜，无人死亡。"
+        names = "、".join(f"{pid}号" for pid in dead_ids)
+        return f"昨夜{names}玩家死亡。（死因不明，可能是狼刀或毒杀。）"
 
     def _format_teammates(self, player: Player, state: GameState) -> str:
         if player.role in WEREWOLF_ROLES:
