@@ -678,10 +678,23 @@ class GameMaster:
             for pid, belief in self.belief_states.items():
                 f.write(belief.model_dump_json() + "\n")
 
-        # Lies
+        # Lies — collect from all agents' lie ledgers
         lies_path = os.path.join(path, "lies.json")
+        all_lies: list[dict] = []
+        for agent in self._agent_cache.values():
+            ledger = agent.lying_engine.ledger
+            for pid, claims in ledger._claims.items():
+                for claim in claims:
+                    all_lies.append({
+                        "player_id": pid,
+                        "round": claim.get("round"),
+                        "type": claim.get("type"),
+                        "claimed_role": claim.get("claimed_role"),
+                        "target": claim.get("target"),
+                        "claimed_result": claim.get("claimed_result"),
+                    })
         with open(lies_path, "w", encoding="utf-8") as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
+            json.dump(all_lies, f, ensure_ascii=False, indent=2)
 
         # LLM call logs — pretty + JSONL
         if self._llm_call_log:
